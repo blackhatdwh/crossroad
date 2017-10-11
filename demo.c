@@ -53,15 +53,44 @@ pthread_mutex_t quadrant_mutex[4];
 pthread_cond_t wait_in_crossing_cond[4];
 pthread_mutex_t wait_in_crossing_mutex[4];
 
+pthread_mutex_t deadlock_detect_mutex = PTHREAD_MUTEX_INITIALIZER;      // ensure that no more than one detect routine can be running
+
 
 int total_car_num = 0;      // indicates how many cars have been created since the program started
 int current_car_num = 0;        // indicates how many cars are on the road currently
 int car_in_queue[4] = {0, 0, 0, 0};       // indicates the number of cars in queue in each direction
 
+void* DeadLockDetect(void* arg){
+    pthread_mutex_lock(&deadlock_detect_mutex);
+    int deadlock_flag = 1;
+    for(int i = 0; i < 4; i++){
+        int return_code = pthread_mutex_trylock(&quadrant_mutex[i]);
+        // if one of the four mutexs can be locked, then there is no deadlock
+        if(return_code == 0){
+            pthread_mutex_unlock(&quadrant_mutex[i]);
+            deadlock_flag = 0;
+            break;
+        }
+    }
+    // if 4 quadrant mutex are all acquired, then a deadlock appears
+    if(deadlock_flag){
+        printf("DEADLOCK: car jam detected, signalling North to go\n");
+        usleep(8000);
+
+        // signal the north car to go first
+        pthread_mutex_lock(&wait_in_crossing_mutex[0]);
+        pthread_cond_signal(&wait_in_crossing_cond[0]);
+        pthread_mutex_unlock(&wait_in_crossing_mutex[0]);
+    }
+    pthread_mutex_unlock(&deadlock_detect_mutex);
+}
+
 void* CarRun(void* arg){
     car_ptr car = (car_ptr)arg;       // copy the argument
-    usleep(rand()%10 * 10000);
     pthread_mutex_lock(&wait_in_queue_mutex[car->direction]);        // lock
+        // start the DeadLockDetection routine
+        pthread_t deadlock_thread_id;
+        pthread_create(&deadlock_thread_id, NULL, DeadLockDetect, NULL);
 
     // come and wait
     while(true){
@@ -83,6 +112,7 @@ void* CarRun(void* arg){
     switch(car->direction){
         case 0:
             pthread_mutex_lock(&quadrant_mutex[0]);
+            usleep(5000);       // observe around before go through the crossing
             return_code = pthread_mutex_trylock(&quadrant_mutex[2]);
             // successfully locked the second mutex, so it can go directly
             if(return_code == 0){
@@ -104,6 +134,7 @@ void* CarRun(void* arg){
             else{
                 pthread_mutex_lock(&wait_in_crossing_mutex[car->direction]);
                 pthread_cond_wait(&wait_in_crossing_cond[car->direction], &wait_in_crossing_mutex[car->direction]);
+                pthread_mutex_unlock(&wait_in_crossing_mutex[car->direction]);
             }
             printf("car %d from %s leave.\n", car->num, direction[car->direction]);     // when signaled, go directly
             pthread_mutex_unlock(&quadrant_mutex[0]);       // unlock its own one quadrants
@@ -119,6 +150,7 @@ void* CarRun(void* arg){
             break;
         case 1:
             pthread_mutex_lock(&quadrant_mutex[3]);
+            usleep(5000);
             return_code = pthread_mutex_trylock(&quadrant_mutex[1]);
             // successfully locked the second mutex, so it can go directly
             if(return_code == 0){
@@ -140,6 +172,7 @@ void* CarRun(void* arg){
             else{
                 pthread_mutex_lock(&wait_in_crossing_mutex[car->direction]);
                 pthread_cond_wait(&wait_in_crossing_cond[car->direction], &wait_in_crossing_mutex[car->direction]);
+                pthread_mutex_unlock(&wait_in_crossing_mutex[car->direction]);
             }
             printf("car %d from %s leave.\n", car->num, direction[car->direction]);     // when signaled, go directly
             pthread_mutex_unlock(&quadrant_mutex[3]);       // unlock its own one quadrants
@@ -155,6 +188,7 @@ void* CarRun(void* arg){
             break;
         case 2:
             pthread_mutex_lock(&quadrant_mutex[2]);
+            usleep(5000);
             return_code = pthread_mutex_trylock(&quadrant_mutex[3]);
             // successfully locked the second mutex, so it can go directly
             if(return_code == 0){
@@ -176,6 +210,7 @@ void* CarRun(void* arg){
             else{
                 pthread_mutex_lock(&wait_in_crossing_mutex[car->direction]);
                 pthread_cond_wait(&wait_in_crossing_cond[car->direction], &wait_in_crossing_mutex[car->direction]);
+                pthread_mutex_unlock(&wait_in_crossing_mutex[car->direction]);
             }
             printf("car %d from %s leave.\n", car->num, direction[car->direction]);     // when signaled, go directly
             pthread_mutex_unlock(&quadrant_mutex[2]);       // unlock its own one quadrants
@@ -191,6 +226,7 @@ void* CarRun(void* arg){
             break;
         case 3:
             pthread_mutex_lock(&quadrant_mutex[1]);
+            usleep(5000);
             return_code = pthread_mutex_trylock(&quadrant_mutex[0]);
             // successfully locked the second mutex, so it can go directly
             if(return_code == 0){
@@ -212,6 +248,7 @@ void* CarRun(void* arg){
             else{
                 pthread_mutex_lock(&wait_in_crossing_mutex[car->direction]);
                 pthread_cond_wait(&wait_in_crossing_cond[car->direction], &wait_in_crossing_mutex[car->direction]);
+                pthread_mutex_unlock(&wait_in_crossing_mutex[car->direction]);
             }
             printf("car %d from %s leave.\n", car->num, direction[car->direction]);     // when signaled, go directly
             pthread_mutex_unlock(&quadrant_mutex[1]);       // unlock its own one quadrants
@@ -228,26 +265,6 @@ void* CarRun(void* arg){
     }
 }
 
-void* DeadLockDetect(void* arg){
-    int deadlock_flag = 1;
-    for(int i = 0; i < 4; i++){
-        int return_code = pthread_mutex_trylock(&quadrant_mutex[i]);
-        // if one of the four mutexs can be locked, then there is no deadlock
-        if(return_code == 0){
-            pthread_mutex_unlock(&quadrant_mutex[i]);
-            deadlock_flag = 0;
-            break;
-        }
-    }
-    // if 4 quadrant mutex are all acquired, then a deadlock appears
-    if(deadlock_flag){
-        printf("DEADLOCK: car jam detected, signalling North to go\n");
-
-        // signal the north car to go first
-        pthread_mutex_lock(&wait_in_crossing_mutex[0]);
-        pthread_cond_signal(&wait_in_crossing_cond[0]);
-    }
-}
 
 
 int main(){
@@ -275,6 +292,7 @@ int main(){
         int return_code;        // capture the return code of pthread_create()
         car_ptr new_car = (car_ptr)malloc(sizeof(struct car_on_road));      // create a new node
         new_car->direction = rand() % 4;      // randomly generate the direction of the next car
+        // new_car->direction = i % 4;
         pthread_mutex_lock(&wait_in_queue_mutex[new_car->direction]);       // lock
         new_car->prev = tail[new_car->direction].prev;
         new_car->prev->next = new_car;
@@ -294,10 +312,6 @@ int main(){
             exit(-1);
         }
         pthread_mutex_unlock(&wait_in_queue_mutex[new_car->direction]);
-        // start the DeadLockDetection routine
-        pthread_t deadlock_thread_id;
-        pthread_create(&deadlock_thread_id, NULL, DeadLockDetect, NULL);
-        pthread_join(deadlock_thread_id, NULL);
     }
     for(int i = 0; i < MAX_CAR_NUM; i++){
         pthread_join(current_thread_array[i], NULL);
